@@ -8,19 +8,19 @@ import pandas as pd
 import cv2
 import numpy as np
 dataPath = 'F:/dataset/RainSnowUtility/'
-batchsize = 4
+batchsize = 8
 volSize_w = 320
 volSize_h = 240
 classNum = 2
-modelPath = 'model'
-baselr = 0.001
+modelPath = 'model2'
+baselr = 0.0001
 def train(dataQueue):
     x = tf.placeholder(
         tf.float32, [
             batchsize,
             volSize_h,
             volSize_w,
-            4
+            3
         ],
         name='x-input')
 
@@ -39,7 +39,7 @@ def train(dataQueue):
     global_step = tf.Variable(0, trainable=False)
     myModel = model.vgg16seg(x, batchsize, classNum)
     getProbsOp = myModel.getProbsOp
-    getLossOp = myModel.buildAndGetLossSimple(y)
+    getLossOp = myModel.buildAndGetLossWeighted(y)
     trainOp = myModel.buildOptmrAndGetTrainOp(lrPL, global_step)
 
     saver = tf.train.Saver()
@@ -60,6 +60,8 @@ def train(dataQueue):
             count += 1
             [imgMats, lblMats, imgKey, flag] = dataQueue.get()
             if flag == 1:
+                # _, loss, loss_a,loss_b,loss_c,prop, step = sess.run(
+                #     [trainOp, getLossOp,myModel.loss_a,myModel.loss_b,myModel.loss_c,
                 _, loss, prop, step = sess.run(
                     [trainOp, getLossOp,
                      getProbsOp, global_step],
@@ -68,7 +70,8 @@ def train(dataQueue):
                         y: lblMats,
                         lrPL: lr
                     })
-                print('train: ' + imgKey + ": loss %f " % loss + ' liverResMean: %f' % np.mean(prop[:, :, :, 1]))
+                print('train: ' + imgKey + " loss:%f " % loss + ' ResMean: %f' % np.mean(prop[:, :, :, 1]))
+                # print('train: ' + imgKey + ": loss a,b,c:%f %f %f, total loss:%f " % (loss_a,loss_b,loss_c,loss) + ' ResMean: %f' % np.mean(prop[:, :, :, 1]))
                 if step % 100 == 0:
                     saver.save(sess, modelPath + '/model', global_step=global_step)
                     print('save step %d suceess' % step)
@@ -82,7 +85,7 @@ def train(dataQueue):
                         lrPL: lr
                     })
                 cv2.imshow('img_rgb',imgMats[0,:,:,0:3])
-                cv2.imshow('img_thermal', imgMats[0,:,:,3:6])
+                # cv2.imshow('img_thermal', imgMats[0,:,:,3:6])
                 cv2.imshow('label_1', lblMats[0,:,:,1].astype(np.float))
                 cv2.imshow('prop', prop[0, :, :, 1])
                 # cv2.imshow('label_11', label_11)
@@ -103,6 +106,8 @@ def prepareDataThread(dataQueue):
     lblMats = np.zeros(shape=[batchsize, volSize_h, volSize_w, 2], dtype=np.int32)
     bi = 0
     for ind in order:
+        if 'Hadsundvej' not in trainDataList_rgb[ind] and 'Hjorringvej' not in trainDataList_rgb[ind]:
+            continue
         img_rgb = cv2.imread(trainDataList_rgb[ind])
         img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB)
         img_rgb = cv2.resize(img_rgb,(volSize_w,volSize_h))
@@ -120,7 +125,7 @@ def prepareDataThread(dataQueue):
         img_mask = cv2.resize(img_mask, (volSize_w,volSize_h))
         label_1 = (img_mask[:, :, 0] > 0).astype(float)
         # label_11 = img_mask[:, :, 0] / 255.0
-        if np.sum(label_1) <= 4:
+        if np.sum(label_1) <= 1000:
             continue
         label_0 = 1 - label_1
         label = np.zeros((img_mask.shape[0], img_mask.shape[1], 2), dtype=np.int)
@@ -138,7 +143,12 @@ def prepareDataThread(dataQueue):
         lblMats[bi, :, :, :] = label
         if bi == batchsize-1:
             bi = 0
-            dataQueue.put(tuple((np.concatenate([imgMats_rgb,imgMats_thermal],axis=3), lblMats, trainDataList_rgb[ind], 1)))
+            # for i in range(0, 3):
+            #     imgMats_rgb[:,:,:,i] += imgMats_thermal[:, :, :, 0]
+            # imgMats_rgb = imgMats_rgb / 2
+            # dataQueue.put(tuple((np.concatenate([imgMats_rgb,imgMats_thermal],axis=3), lblMats, trainDataList_rgb[ind], 1)))
+            dataQueue.put(
+                tuple((imgMats_rgb, lblMats, trainDataList_rgb[ind], 1)))
         else:
             bi += 1
 
@@ -155,6 +165,8 @@ def prepareDataThreadVali(dataQueue):
     lblMats = np.zeros(shape=[batchsize, volSize_h, volSize_w, 2], dtype=np.int32)
     bi = 0
     for ind in order:
+        if 'Hadsundvej' not in testDataList_rgb[ind] and 'Hjorringvej' not in testDataList_rgb[ind]:
+            continue
         img_rgb = cv2.imread(testDataList_rgb[ind])
         img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB)
         img_rgb = cv2.resize(img_rgb, (volSize_w,volSize_h))
@@ -172,7 +184,7 @@ def prepareDataThreadVali(dataQueue):
         img_mask = cv2.resize(img_mask, (volSize_w,volSize_h))
         # label_1 = img_mask[:, :, 0] / 255.0
         label_1 = (img_mask[:, :, 0] > 0).astype(float)
-        if np.sum(label_1) <= 4:
+        if np.sum(label_1) <= 1000:
             continue
         label_0 = 1 - label_1
         label = np.zeros((img_mask.shape[0], img_mask.shape[1], 2), dtype=np.int)
@@ -189,8 +201,13 @@ def prepareDataThreadVali(dataQueue):
         lblMats[bi, :, :, :] = label
         if bi == batchsize-1:
             bi = 0
-            if np.random.random() < 0.01:
-                dataQueue.put(tuple((np.concatenate([imgMats_rgb,imgMats_thermal],axis=3), lblMats, testDataList_rgb[ind], 0)))
+            # for i in range(0, 3):
+            #     imgMats_rgb[:,:,:,i] += imgMats_thermal[:, :, :, 0]
+            # imgMats_rgb = imgMats_rgb/2
+            if np.random.random() < 0.03:
+                # dataQueue.put(tuple((np.concatenate([imgMats_rgb,imgMats_thermal],axis=3), lblMats, testDataList_rgb[ind], 0)))
+                dataQueue.put(
+                    tuple((imgMats_rgb, lblMats, testDataList_rgb[ind], 0)))
         else:
             bi += 1
 
